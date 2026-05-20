@@ -84,7 +84,7 @@ router.post("/login", async (req, res) => {
 // POST /api/auth/magic-link/send  { email, fullName? }
 router.post("/magic-link/send", async (req, res) => {
   try {
-    const { email, fullName } = req.body;
+    const { email, fullName, deviceId } = req.body;
     if (!email) return res.status(400).json({ success: false, message: "Email required" });
 
     // Always respond success to avoid user enumeration
@@ -94,7 +94,7 @@ router.post("/magic-link/send", async (req, res) => {
     const expiresAt = new Date(Date.now() + ttl);
     const purpose = (await User.findOne({ email })) ? "login" : "signup";
 
-    await MagicLinkToken.create({ email: email.toLowerCase(), tokenHash, expiresAt, purpose });
+    await MagicLinkToken.create({ email: email.toLowerCase(), tokenHash, expiresAt, purpose, deviceId: deviceId || undefined });
 
     // The email link must be clickable from ANY device, so in production it must
     // never be a localhost URL (which only works on the dev machine). Priority:
@@ -172,6 +172,46 @@ router.post("/magic-link/verify", async (req, res) => {
       user.lastLoginAt = new Date();
       await user.save();
     }
+
+    // Cross-device: stamp the user so the requesting device's poll can claim it.
+    if (record.deviceId) {
+      record.verifiedUserId = user._id;
+      await record.save();
+    }
+
+    const team = await ensureTeamForUser(user);
+    const jwt  = signToken(user._id.toString());
+    res.json({
+      success: true,
+      data: { token: jwt, userId: user._id, email: user.email, fullName: user.fullName, teamId: team._id },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// POST /api/auth/magic-link/poll  { deviceId }
+// Cross-device sign-in: the device that REQUESTED the link polls here. Once the
+// link is opened (verified) on ANY device, this returns a fresh session and
+// deletes the record (one-time claim — the deviceId can't lift it twice).
+router.post("/magic-link/poll", async (req, res) => {
+  try {
+    const { deviceId } = req.body;
+    if (!deviceId || String(deviceId).length < 16) {
+      return res.status(400).json({ success: false, message: "Valid deviceId required" });
+    }
+
+    const record = await MagicLinkToken.findOne({
+      deviceId: String(deviceId),
+      verifiedUserId: { $ne: null },
+      expiresAt: { $gt: new Date() },
+    });
+    if (!record) return res.json({ success: true, data: { pending: true } });
+
+    const user = await User.findById(record.verifiedUserId);
+    if (!user) return res.json({ success: true, data: { pending: true } });
+
+    await MagicLinkToken.deleteOne({ _id: record._id }); // one-time claim
 
     const team = await ensureTeamForUser(user);
     const jwt  = signToken(user._id.toString());

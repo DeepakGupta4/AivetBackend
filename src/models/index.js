@@ -39,6 +39,11 @@ const magicLinkTokenSchema = new Schema({
   expiresAt: { type: Date,   required: true },
   usedAt:    { type: Date },
   purpose:   { type: String, enum: ["login","signup"], default: "login" },
+  // Cross-device sign-in: the requesting device sends a random deviceId; once the
+  // link is opened (verified) on any device we stamp verifiedUserId, and the
+  // requesting device polls to claim the session.
+  deviceId:       { type: String, index: true },
+  verifiedUserId: { type: Schema.Types.ObjectId, ref: "User" },
 }, { timestamps: true });
 
 // TTL and compound indexes (tokenHash uniqueness comes from the field above)
