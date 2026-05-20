@@ -14,11 +14,18 @@ export async function connectDB() {
 
   if (!globalCache._mongoose.promise) {
     globalCache._mongoose.promise = mongoose.connect(process.env.MONGODB_URI, {
-      serverSelectionTimeoutMS: 5000,
-      maxPoolSize: 10,
+      // Serverless cold starts need more time to reach Atlas; a small pool keeps
+      // us under the free-tier connection cap across many function instances.
+      serverSelectionTimeoutMS: 15000,
+      maxPoolSize: 5,
     }).then((m) => {
       console.log("✅ MongoDB connected");
       return m;
+    }).catch((err) => {
+      // Reset the cached promise so the NEXT request retries instead of reusing
+      // a permanently-rejected promise.
+      globalCache._mongoose.promise = null;
+      throw err;
     });
   }
 
