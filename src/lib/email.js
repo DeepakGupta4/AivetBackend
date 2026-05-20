@@ -18,9 +18,32 @@ function getTransporter() {
   return cachedTransporter;
 }
 
+// Resend HTTP API — a single HTTPS call, no SMTP handshake. This is instant and
+// reliable on serverless (Vercel), where raw SMTP is slow/flaky.
+async function sendViaResend({ to, subject, html, text }) {
+  const from = process.env.RESEND_FROM ?? process.env.SMTP_FROM ?? "AIVet <onboarding@resend.dev>";
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ from, to, subject, html, text }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(`Resend ${res.status}: ${body?.message || JSON.stringify(body)}`);
+  }
+  return { messageId: body?.id };
+}
+
 export async function sendEmail({ to, subject, html, text }) {
+  // Prefer Resend when configured (best for serverless). Fall back to SMTP.
+  if (process.env.RESEND_API_KEY) {
+    return sendViaResend({ to, subject, html, text });
+  }
   if (!SMTP_USER) {
-    console.warn("[email] SMTP not configured, logging email instead:");
+    console.warn("[email] No RESEND_API_KEY and no SMTP configured — logging email instead:");
     console.warn({ to, subject, text: text ?? html?.slice(0, 200) });
     return { skipped: true };
   }

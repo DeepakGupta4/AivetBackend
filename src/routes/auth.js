@@ -104,10 +104,21 @@ router.post("/magic-link/send", async (req, res) => {
       fullName ? `&fullName=${encodeURIComponent(fullName)}` : ""
     }`;
     const ttlMin = Math.max(1, Math.round(ttl / 60000));
-    await sendMagicLinkEmail(email, url, ttlMin).catch((e) => console.error("[magic-link email]", e.message));
-
-    // In non-production, return the link so the flow is testable without email.
     const isProd = process.env.NODE_ENV === "production";
+
+    // Surface send failures instead of telling the user "check your email" when
+    // nothing actually went out. (Doesn't reveal whether the account exists.)
+    try {
+      await sendMagicLinkEmail(email, url, ttlMin);
+    } catch (e) {
+      console.error("[magic-link email]", e.message);
+      return res.status(502).json({
+        success: false,
+        message: "Could not send the sign-in email right now. Please try again in a moment.",
+        ...(isProd ? {} : { detail: e.message, devLink: url }),
+      });
+    }
+
     res.json({
       success: true,
       data: {
