@@ -1,0 +1,14 @@
+node_modules/
+.env
+.env.local
+.env.*.local
+*.log
+logs/
+.DS_Store
+.vercel/
+dist/
+build/
+coverage/
+venv/
+*.pyc
+__pycache__/
