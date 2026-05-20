@@ -105,7 +105,21 @@ app.use("/api/webhooks", webhookRoutes);
 app.use(express.json({ limit: "1mb" }));
 
 // ── App routes ────────────────────────────────────────────────────────────
-app.use("/api/favicon",   faviconRoutes);   // public — brand logo proxy
+app.use("/api/favicon",   faviconRoutes);   // public — brand logo proxy (no DB)
+
+// On serverless, a request can hit a route before the cold-start DB connect has
+// resolved → Mongoose buffers the query and fails with "buffering timed out".
+// Await the (cached) connection here so DB routes never run unconnected.
+app.use(async (_req, res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (err) {
+    logger.error("DB connection failed for request", { error: err?.message });
+    res.status(503).json({ success: false, message: "Database unavailable, please try again." });
+  }
+});
+
 app.use("/api/auth",      authRoutes);
 app.use("/api/projects",  projectRoutes);
 app.use("/api/projects",  visibilityRoutes);   // /api/projects/:id/dashboard
