@@ -72,20 +72,24 @@ app.use(timeout.handler({
 if (process.env.NODE_ENV === "production") {
   app.use("/api/", apiLimiter);
 }
-// In production, set CORS_ORIGINS to your dashboard frontend domain(s),
-// comma-separated (e.g. "https://app.aivet.io"). Falls back to FRONTEND_URL,
-// but that points at the marketing site — so CORS_ORIGINS is what unblocks the
-// deployed dashboard's API calls.
-const allowedOrigins = (process.env.CORS_ORIGINS ?? process.env.FRONTEND_URL ?? "")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
+// The deployed dashboard frontend is always allowed; add more via CORS_ORIGINS
+// (comma-separated) without needing a code change.
+const PROD_ORIGINS = ["https://aivet-frontend.vercel.app"];
+const allowedOrigins = [
+  ...(process.env.CORS_ORIGINS ?? process.env.FRONTEND_URL ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
+  ...PROD_ORIGINS,
+];
 // Always allow the local Next dev server outside production.
 if (process.env.NODE_ENV !== "production") {
   allowedOrigins.push("http://localhost:3000", "http://127.0.0.1:3000");
 }
+// De-dupe.
+const uniqueOrigins = [...new Set(allowedOrigins)];
 app.use(cors({
-  origin: allowedOrigins.length ? allowedOrigins : true,
+  origin: uniqueOrigins.length ? uniqueOrigins : true,
   credentials: true,
 }));
 app.use(cookieParser());
