@@ -38,6 +38,10 @@ validateEnvironment();
 const app  = express();
 const PORT = process.env.PORT ?? 8000;
 
+// Behind Vercel's proxy — needed so req.ip / rate-limiter read X-Forwarded-For
+// correctly (otherwise express-rate-limit throws ERR_ERL_FORWARDED_HEADER).
+app.set("trust proxy", 1);
+
 // ── Security & logging ────────────────────────────────────────────────────
 app.use(helmet());
 
