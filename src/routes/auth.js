@@ -96,10 +96,20 @@ router.post("/magic-link/send", async (req, res) => {
 
     await MagicLinkToken.create({ email: email.toLowerCase(), tokenHash, expiresAt, purpose });
 
-    // Point the link at wherever the user actually is (localhost in dev, the
-    // real app domain in prod). FRONTEND_URL points at the marketing site, so
-    // it must NOT be used here — mirror billing.js and prefer the request origin.
-    const base = process.env.MAGIC_LINK_BASE_URL ?? req.headers.origin ?? process.env.APP_URL ?? "http://localhost:3000";
+    // The email link must be clickable from ANY device, so in production it must
+    // never be a localhost URL (which only works on the dev machine). Priority:
+    //   1. MAGIC_LINK_BASE_URL (explicit override)
+    //   2. the request origin — but in prod, ignore a localhost origin (happens
+    //      when the frontend is run locally against the deployed API)
+    //   3. the deployed frontend.
+    const FALLBACK_FRONTEND = process.env.APP_URL || "https://aivet-frontend.vercel.app";
+    const origin = req.headers.origin;
+    const originIsLocal = !!origin && /localhost|127\.0\.0\.1/.test(origin);
+    const prod = process.env.NODE_ENV === "production";
+    const base =
+      process.env.MAGIC_LINK_BASE_URL
+      ?? ((prod && (originIsLocal || !origin)) ? FALLBACK_FRONTEND : origin)
+      ?? FALLBACK_FRONTEND;
     const url = `${base}/verify?token=${raw}&email=${encodeURIComponent(email)}${
       fullName ? `&fullName=${encodeURIComponent(fullName)}` : ""
     }`;
