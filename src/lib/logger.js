@@ -37,48 +37,50 @@ const consoleFormat = winston.format.combine(
   })
 );
 
-// Create logs directory if it doesn't exist
+// Serverless platforms (Vercel/Lambda) have a read-only filesystem, so writing
+// rotating log files there throws on every log. Detect that and log to the
+// console only — the platform captures stdout. File rotation is used only on
+// long-lived servers (local dev / a VM).
+const isServerless = !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
 const logsDir = path.join(process.cwd(), 'logs');
 
-// Daily rotate file transport for all logs
-const fileRotateTransport = new DailyRotateFile({
-  filename: path.join(logsDir, 'application-%DATE%.log'),
-  datePattern: 'YYYY-MM-DD',
-  maxSize: '20m',
-  maxFiles: '14d',
-  format: logFormat,
-});
+const transports = [
+  new winston.transports.Console({
+    // Plain JSON in production logs (machine-readable), pretty colours in dev.
+    format: process.env.NODE_ENV === 'production' ? logFormat : consoleFormat,
+  }),
+];
 
-// Daily rotate file transport for errors only
-const errorFileRotateTransport = new DailyRotateFile({
-  filename: path.join(logsDir, 'error-%DATE%.log'),
-  datePattern: 'YYYY-MM-DD',
-  level: 'error',
-  maxSize: '20m',
-  maxFiles: '30d',
-  format: logFormat,
-});
+if (!isServerless) {
+  transports.push(
+    new DailyRotateFile({
+      filename: path.join(logsDir, 'application-%DATE%.log'),
+      datePattern: 'YYYY-MM-DD',
+      maxSize: '20m',
+      maxFiles: '14d',
+      format: logFormat,
+    }),
+    new DailyRotateFile({
+      filename: path.join(logsDir, 'error-%DATE%.log'),
+      datePattern: 'YYYY-MM-DD',
+      level: 'error',
+      maxSize: '20m',
+      maxFiles: '30d',
+      format: logFormat,
+    }),
+  );
+}
 
 // Create logger instance
 const logger = winston.createLogger({
   level: process.env.LOG_LEVEL || 'info',
   format: logFormat,
-  defaultMeta: { 
+  defaultMeta: {
     service: 'aivet-api',
     environment: process.env.NODE_ENV || 'development',
   },
-  transports: [
-    fileRotateTransport,
-    errorFileRotateTransport,
-  ],
+  transports,
 });
-
-// Add console transport in development
-if (process.env.NODE_ENV !== 'production') {
-  logger.add(new winston.transports.Console({
-    format: consoleFormat,
-  }));
-}
 
 // Request logging middleware
 export const requestLogger = (req, res, next) => {

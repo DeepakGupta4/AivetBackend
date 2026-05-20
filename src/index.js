@@ -72,7 +72,11 @@ app.use(timeout.handler({
 if (process.env.NODE_ENV === "production") {
   app.use("/api/", apiLimiter);
 }
-const allowedOrigins = (process.env.FRONTEND_URL ?? "")
+// In production, set CORS_ORIGINS to your dashboard frontend domain(s),
+// comma-separated (e.g. "https://app.aivet.io"). Falls back to FRONTEND_URL,
+// but that points at the marketing site — so CORS_ORIGINS is what unblocks the
+// deployed dashboard's API calls.
+const allowedOrigins = (process.env.CORS_ORIGINS ?? process.env.FRONTEND_URL ?? "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
