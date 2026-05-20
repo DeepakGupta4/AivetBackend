@@ -86,10 +86,10 @@ const allowedOrigins = [
     .filter(Boolean),
   ...PROD_ORIGINS,
 ];
-// Always allow the local Next dev server outside production.
-if (process.env.NODE_ENV !== "production") {
-  allowedOrigins.push("http://localhost:3000", "http://127.0.0.1:3000");
-}
+// Always allow the local Next dev server too — handy for running the frontend
+// locally against the deployed API. (API auth is via Bearer token, not cookies,
+// so allowing localhost here is low-risk.)
+allowedOrigins.push("http://localhost:3000", "http://127.0.0.1:3000");
 // De-dupe.
 const uniqueOrigins = [...new Set(allowedOrigins)];
 app.use(cors({
