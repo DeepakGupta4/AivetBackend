@@ -26,6 +26,26 @@ function normName(s) {
     .trim();
 }
 
+// Build the set of names that count as "the brand": the brand name AND the
+// domain's root (so a typo'd brand name like "amazom" still matches via
+// amazon.com → "amazon"). Used with matchesBrand.
+function brandAliases(brandName, domain) {
+  const set = new Set();
+  const b = normName(brandName);
+  if (b) set.add(b);
+  const root = normName((domain ?? "").split(".")[0]);
+  if (root.length >= 2) set.add(root);
+  return [...set];
+}
+
+// True if an entity is the brand: exact alias match OR a sub-brand of it
+// (e.g. "Amazon Prime" counts for "Amazon").
+function matchesBrand(entityName, aliases) {
+  const e = normName(entityName);
+  if (!e) return false;
+  return aliases.some((a) => a && (e === a || e.startsWith(a + " ")));
+}
+
 const round1 = (n) => Math.round(n * 10) / 10;
 const clamp = (n, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, n));
 
@@ -67,6 +87,7 @@ router.get("/:projectId/dashboard", async (req, res) => {
     ]);
 
     const brand = normName(project?.brandName);
+    const aliases = brandAliases(project?.brandName, project?.domain);
     const brandDomain = (project?.domain ?? "").toLowerCase();
     const competitors = project?.competitors ?? [];
 
@@ -95,6 +116,7 @@ router.get("/:projectId/dashboard", async (req, res) => {
 
     // ── Aggregate the period's prompt runs (responses → mentions/citations) ─
     let totalResponses = 0;
+    let brandResponses = 0;   // responses where the brand (or a sub-brand) appears
     let citationsFound = 0;
     const modelStats = {};                 // model → { responses, mentioned, mentions }
     const entityResponses = {};            // entity (lower) → responses mentioning it
@@ -117,6 +139,7 @@ router.get("/:projectId/dashboard", async (req, res) => {
         const mentions = resp.mentions ?? [];
         const seenEntities = new Set();
         let brandMention = null;
+        let brandThisResp = false;
         for (const m of mentions) {
           const display = (m.entityName ?? "").trim();
           const name = normName(display);
@@ -126,12 +149,15 @@ router.get("/:projectId/dashboard", async (req, res) => {
             entityResponses[name] = (entityResponses[name] ?? 0) + 1;
             seenEntities.add(name);
           }
-          if (name === brand) {
-            modelStats[model].mentioned++;
+          if (matchesBrand(display, aliases)) {
+            // Count the brand once per response (a response may name both
+            // "Amazon" and "Amazon Prime").
+            if (!brandThisResp) { modelStats[model].mentioned++; brandThisResp = true; }
             modelStats[model].mentions += m.mentionCount ?? 1;
             if (!brandMention) brandMention = m;
           }
         }
+        if (brandThisResp) brandResponses++;
 
         // Build the "Recent Mentions" feed from responses that name the brand.
         if (brandMention && recentMentions.length < 8) {
@@ -157,16 +183,17 @@ router.get("/:projectId/dashboard", async (req, res) => {
 
     // Share of voice: brand + every brand DISCOVERED in answers, by mention freq.
     const pctOf = (lower) => (totalResponses ? Math.round(((entityResponses[lower] ?? 0) / totalResponses) * 100) : 0);
-    const ownEntry = { brand: project?.brandName ?? "You", score: pctOf(brand), isOwn: true };
+    const brandScore = totalResponses ? Math.round((brandResponses / totalResponses) * 100) : 0;
+    const ownEntry = { brand: project?.brandName ?? "You", score: brandScore, isOwn: true };
     const discovered = Object.keys(entityResponses)
-      .filter((lower) => lower !== brand)
+      .filter((lower) => !matchesBrand(lower, aliases))   // exclude the brand & its sub-brands
       .map((lower) => ({ brand: entityDisplay[lower] ?? lower, score: pctOf(lower), isOwn: false }))
       .sort((a, b) => b.score - a.score)
       .slice(0, 8);
     const competitorShare = [ownEntry, ...discovered].sort((a, b) => b.score - a.score);
     // Count only competitors that appear in 2+ responses (filters one-off noise
     // from greedy brand extraction — otherwise a single audit shows 100s).
-    const competitorsDiscovered = Object.keys(entityResponses).filter((l) => l !== brand && entityResponses[l] >= 2).length;
+    const competitorsDiscovered = Object.keys(entityResponses).filter((l) => !matchesBrand(l, aliases) && entityResponses[l] >= 2).length;
 
     // ── Trend + latest score breakdown ─────────────────────────────────────
     const trend = scores.map((s) => ({
@@ -237,6 +264,7 @@ router.get("/:projectId/visibility", async (req, res) => {
     ]);
 
     const brand = normName(project?.brandName);
+    const aliases = brandAliases(project?.brandName, project?.domain);
     const domain = (project?.domain ?? "").toLowerCase();
 
     const latest = scores.at(-1) ?? null;
@@ -256,7 +284,7 @@ router.get("/:projectId/visibility", async (req, res) => {
         const H = isRecent ? (recent[model] ??= blank()) : (prev[model] ??= blank());
         A.responses++; H.responses++;
 
-        const brandMentions = (resp.mentions ?? []).filter((m) => normName(m.entityName) === brand);
+        const brandMentions = (resp.mentions ?? []).filter((m) => matchesBrand(m.entityName, aliases));
         if (brandMentions.length) {
           A.mentioned++; H.mentioned++;
           for (const m of brandMentions) {
@@ -486,24 +514,27 @@ router.get("/:projectId/geo", async (req, res) => {
     ]);
 
     // Brand vs top-competitor share of voice (for the gap recommendation).
-    const brandKey = normName(project?.brandName);
-    const shareCount = { [brandKey]: 0 };
+    const aliases = brandAliases(project?.brandName, project?.domain);
+    const shareCount = {};
     for (const c of project?.competitors ?? []) shareCount[normName(c.brandName)] = 0;
-    let totalResponses = 0;
+    let totalResponses = 0, brandResponses = 0;
     for (const run of runs) {
       for (const resp of run.responses ?? []) {
         totalResponses++;
         const seen = new Set();
+        let brandThisResp = false;
         for (const m of resp.mentions ?? []) {
+          if (matchesBrand(m.entityName, aliases)) brandThisResp = true;
           const n = normName(m.entityName);
           if (shareCount[n] == null || seen.has(n)) continue;
           seen.add(n);
           shareCount[n]++;
         }
+        if (brandThisResp) brandResponses++;
       }
     }
     const pct = (n) => (totalResponses ? Math.round((n / totalResponses) * 100) : 0);
-    const brandShare = pct(shareCount[brandKey] ?? 0);
+    const brandShare = pct(brandResponses);
     let topCompetitor = null, topShare = 0;
     for (const c of project?.competitors ?? []) {
       const sh = pct(shareCount[normName(c.brandName)] ?? 0);

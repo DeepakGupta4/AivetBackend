@@ -23,6 +23,24 @@ function normName(s) {
     .trim();
 }
 
+// Names that count as "the brand": brand name + domain root (so a typo'd name
+// like "amazom" still matches via amazon.com → "amazon").
+function brandAliases(brandName, domain) {
+  const set = new Set();
+  const b = normName(brandName);
+  if (b) set.add(b);
+  const root = normName((domain ?? "").split(".")[0]);
+  if (root.length >= 2) set.add(root);
+  return [...set];
+}
+
+// Exact alias match OR a sub-brand ("Amazon Prime" counts for "Amazon").
+function matchesBrand(entityName, aliases) {
+  const e = normName(entityName);
+  if (!e) return false;
+  return aliases.some((a) => a && (e === a || e.startsWith(a + " ")));
+}
+
 /**
  * @param {Array} runs - PromptRun docs (each has .responses[].mentions)
  * @param {string} brandName
@@ -37,7 +55,7 @@ export function calculateVisibility(runs, brandName, brandDomain) {
     };
   }
 
-  const brand = normName(brandName);
+  const aliases = brandAliases(brandName, brandDomain);
   const domain = brandDomain?.toLowerCase() ?? "";
 
   let totalResponses    = 0;
@@ -56,7 +74,7 @@ export function calculateVisibility(runs, brandName, brandDomain) {
       modelsBreakdown[resp.model] = (modelsBreakdown[resp.model] ?? 0) + 1;
 
       const brandMentions = (resp.mentions ?? []).filter(
-        (m) => normName(m.entityName) === brand
+        (m) => matchesBrand(m.entityName, aliases)
       );
       if (brandMentions.length) {
         mentionedResponses++;
