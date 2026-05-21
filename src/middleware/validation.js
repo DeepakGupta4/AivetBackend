@@ -37,12 +37,21 @@ export const teamSchemas = {
   }),
 };
 
+// Accept a full URL ("https://www.flipkart.com/") OR a bare domain and
+// normalize it to "flipkart.com" before validating — users paste either.
+const domainField = z.preprocess(
+  (v) => typeof v === 'string'
+    ? v.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '')
+    : v,
+  z.string().min(1, 'Domain is required')
+    .regex(/^[a-z0-9][a-z0-9-]{0,61}[a-z0-9](?:\.[a-z]{2,})+$/, 'Invalid domain format'),
+);
+
 // Project validation schemas
 export const projectSchemas = {
   create: z.object({
     name: z.string().min(1, 'Project name is required').max(100, 'Project name too long'),
-    domain: z.string().min(1, 'Domain is required')
-      .regex(/^[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9](?:\.[a-zA-Z]{2,})+$/, 'Invalid domain format'),
+    domain: domainField,
     brandName: z.string().min(1, 'Brand name is required').max(50, 'Brand name too long'),
     industry: z.string().max(50, 'Industry name too long').optional(),
     targetRegion: z.string().max(50, 'Target region too long').optional(),
@@ -56,8 +65,7 @@ export const projectSchemas = {
 
   update: z.object({
     name: z.string().min(1, 'Project name is required').max(100, 'Project name too long').optional(),
-    domain: z.string().min(1, 'Domain is required')
-      .regex(/^[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9](?:\.[a-zA-Z]{2,})+$/, 'Invalid domain format').optional(),
+    domain: domainField.optional(),
     brandName: z.string().min(1, 'Brand name is required').max(50, 'Brand name too long').optional(),
     industry: z.string().max(50, 'Industry name too long').optional(),
     targetRegion: z.string().max(50, 'Target region too long').optional(),
