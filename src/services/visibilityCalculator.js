@@ -13,6 +13,16 @@ const WEIGHTS = {
 
 function clamp(n, lo = 0, hi = 100) { return Math.max(lo, Math.min(hi, n)); }
 
+// Normalize a brand/entity name so "Levi's", "Levis" and "levi's" match.
+function normName(s) {
+  return (s ?? "")
+    .toLowerCase()
+    .replace(/['’`´]/g, "")
+    .replace(/[.,/\\|]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /**
  * @param {Array} runs - PromptRun docs (each has .responses[].mentions)
  * @param {string} brandName
@@ -27,7 +37,7 @@ export function calculateVisibility(runs, brandName, brandDomain) {
     };
   }
 
-  const brand = brandName?.toLowerCase() ?? "";
+  const brand = normName(brandName);
   const domain = brandDomain?.toLowerCase() ?? "";
 
   let totalResponses    = 0;
@@ -46,7 +56,7 @@ export function calculateVisibility(runs, brandName, brandDomain) {
       modelsBreakdown[resp.model] = (modelsBreakdown[resp.model] ?? 0) + 1;
 
       const brandMentions = (resp.mentions ?? []).filter(
-        (m) => m.entityName?.toLowerCase() === brand
+        (m) => normName(m.entityName) === brand
       );
       if (brandMentions.length) {
         mentionedResponses++;

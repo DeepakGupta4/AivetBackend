@@ -15,6 +15,17 @@ function getScoreBand(score) {
   return "CRITICAL";
 }
 
+// Normalize a brand/entity name for matching so "Levi's", "Levis" and "levi's"
+// all compare equal: lowercase, strip apostrophes, collapse punctuation/space.
+function normName(s) {
+  return (s ?? "")
+    .toLowerCase()
+    .replace(/['’`´]/g, "")
+    .replace(/[.,/\\|]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 const round1 = (n) => Math.round(n * 10) / 10;
 const clamp = (n, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, n));
 
@@ -55,7 +66,7 @@ router.get("/:projectId/dashboard", async (req, res) => {
         .lean(),
     ]);
 
-    const brand = (project?.brandName ?? "").toLowerCase();
+    const brand = normName(project?.brandName);
     const brandDomain = (project?.domain ?? "").toLowerCase();
     const competitors = project?.competitors ?? [];
 
@@ -108,7 +119,7 @@ router.get("/:projectId/dashboard", async (req, res) => {
         let brandMention = null;
         for (const m of mentions) {
           const display = (m.entityName ?? "").trim();
-          const name = display.toLowerCase();
+          const name = normName(display);
           if (!name) continue;
           if (!entityDisplay[name]) entityDisplay[name] = display;
           if (!seenEntities.has(name)) {
@@ -225,7 +236,7 @@ router.get("/:projectId/visibility", async (req, res) => {
       PromptRun.find({ projectId, createdAt: { $gte: since } }).lean(),
     ]);
 
-    const brand = (project?.brandName ?? "").toLowerCase();
+    const brand = normName(project?.brandName);
     const domain = (project?.domain ?? "").toLowerCase();
 
     const latest = scores.at(-1) ?? null;
@@ -245,7 +256,7 @@ router.get("/:projectId/visibility", async (req, res) => {
         const H = isRecent ? (recent[model] ??= blank()) : (prev[model] ??= blank());
         A.responses++; H.responses++;
 
-        const brandMentions = (resp.mentions ?? []).filter((m) => (m.entityName ?? "").toLowerCase() === brand);
+        const brandMentions = (resp.mentions ?? []).filter((m) => normName(m.entityName) === brand);
         if (brandMentions.length) {
           A.mentioned++; H.mentioned++;
           for (const m of brandMentions) {
@@ -330,12 +341,12 @@ router.get("/:projectId/competitor-analysis", async (req, res) => {
     ]);
 
     const brandName = project?.brandName ?? "";
-    const brandLower = brandName.toLowerCase();
+    const brandLower = normName(brandName);
 
     // Discover every brand that appears in answers (+ the brand + configured competitors).
-    const display = new Map(); // lower → display name
+    const display = new Map(); // normalized → display name
     if (brandName) display.set(brandLower, brandName);
-    for (const c of project?.competitors ?? []) if (c.brandName) display.set(c.brandName.toLowerCase(), c.brandName);
+    for (const c of project?.competitors ?? []) if (c.brandName) display.set(normName(c.brandName), c.brandName);
 
     const models = new Set();
     let totalResponses = 0;
@@ -354,7 +365,7 @@ router.get("/:projectId/competitor-analysis", async (req, res) => {
         for (const m of resp.mentions ?? []) {
           const nm = (m.entityName ?? "").trim();
           if (!nm) continue;
-          const lower = nm.toLowerCase();
+          const lower = normName(nm);
           if (!display.has(lower)) display.set(lower, nm);
           if (seen.has(lower)) continue;
           seen.add(lower);
@@ -475,16 +486,16 @@ router.get("/:projectId/geo", async (req, res) => {
     ]);
 
     // Brand vs top-competitor share of voice (for the gap recommendation).
-    const brandKey = (project?.brandName ?? "").toLowerCase();
+    const brandKey = normName(project?.brandName);
     const shareCount = { [brandKey]: 0 };
-    for (const c of project?.competitors ?? []) shareCount[(c.brandName ?? "").toLowerCase()] = 0;
+    for (const c of project?.competitors ?? []) shareCount[normName(c.brandName)] = 0;
     let totalResponses = 0;
     for (const run of runs) {
       for (const resp of run.responses ?? []) {
         totalResponses++;
         const seen = new Set();
         for (const m of resp.mentions ?? []) {
-          const n = (m.entityName ?? "").toLowerCase();
+          const n = normName(m.entityName);
           if (shareCount[n] == null || seen.has(n)) continue;
           seen.add(n);
           shareCount[n]++;
@@ -495,7 +506,7 @@ router.get("/:projectId/geo", async (req, res) => {
     const brandShare = pct(shareCount[brandKey] ?? 0);
     let topCompetitor = null, topShare = 0;
     for (const c of project?.competitors ?? []) {
-      const sh = pct(shareCount[(c.brandName ?? "").toLowerCase()] ?? 0);
+      const sh = pct(shareCount[normName(c.brandName)] ?? 0);
       if (sh > topShare) { topShare = sh; topCompetitor = c.brandName; }
     }
     const competitorGap = topShare > brandShare ? topShare - brandShare : 0;
