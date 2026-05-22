@@ -102,6 +102,18 @@ async function runPool(items, limit, worker) {
   await Promise.all(lanes);
 }
 
+// Hard cap on a single engine call. Node's fetch has NO default timeout, so a
+// slow/hung provider (DataForSEO SERP, grounded search) could otherwise stall a
+// whole concurrency lane indefinitely. Past this we give up on that one engine
+// for that one prompt and keep going.
+const ENGINE_TIMEOUT_MS = parseInt(process.env.ENGINE_TIMEOUT_MS ?? "30000", 10) || 30000;
+function withTimeout(promise, ms = ENGINE_TIMEOUT_MS) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("engine timeout")), ms)),
+  ]);
+}
+
 // Retry transient AI errors (429 rate-limit, 529/503 overload, timeouts).
 async function withRetry(fn, tries = 3) {
   let lastErr;
@@ -159,7 +171,7 @@ export async function runCampaign(campaignId) {
     if (!run) return;
 
     try {
-      const results = await Promise.allSettled(callers.map((fn) => withRetry(() => fn(prompt.text))));
+      const results = await Promise.allSettled(callers.map((fn) => withTimeout(withRetry(() => fn(prompt.text)))));
       const raw = results.filter((r) => r.status === "fulfilled").map((r) => r.value);
       const responses = await Promise.all(raw.map(async (resp) => {
         let mentions;
@@ -185,7 +197,7 @@ export async function runCampaign(campaignId) {
     }
   }
 
-  const concurrency = Math.max(1, parseInt(process.env.AUDIT_CONCURRENCY ?? "5", 10) || 5);
+  const concurrency = Math.max(1, parseInt(process.env.AUDIT_CONCURRENCY ?? "8", 10) || 8);
   await runPool(activePrompts, concurrency, processPrompt);
 
   // Schedule next run
