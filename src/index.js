@@ -15,6 +15,7 @@ import logger, { requestLogger } from "./lib/logger.js";
 import { healthCheckMiddleware, detailedHealthCheckMiddleware, readinessCheck, livenessCheck, startHealthMonitoring } from "./lib/healthCheck.js";
 import authRoutes       from "./routes/auth.js";
 import projectRoutes    from "./routes/projects.js";
+import onboardingRoutes from "./routes/onboarding.js";
 import campaignRoutes   from "./routes/campaigns.js";
 import visibilityRoutes from "./routes/visibility.js";
 import billingRoutes    from "./routes/billing.js";
@@ -124,10 +125,11 @@ app.use(async (_req, res, next) => {
   }
 });
 
-app.use("/api/auth",      authRoutes);
-app.use("/api/projects",  projectRoutes);
-app.use("/api/projects",  visibilityRoutes);   // /api/projects/:id/dashboard
-app.use("/api/campaigns", campaignRoutes);
+app.use("/api/auth",       authRoutes);
+app.use("/api/onboarding", onboardingRoutes);   // brand-add wizard (analyze/prompts/keywords/complete)
+app.use("/api/projects",   projectRoutes);
+app.use("/api/projects",   visibilityRoutes);   // /api/projects/:id/dashboard
+app.use("/api/campaigns",  campaignRoutes);
 app.use("/api/billing",   billingRoutes);
 app.use("/api/reports",   reportRoutes);
 app.use("/api/team",      teamRoutes);

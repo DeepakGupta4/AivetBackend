@@ -85,6 +85,23 @@ function extractMentions(text, entities) {
   return out;
 }
 
+// Run `worker` over `items` with at most `limit` in flight at once. Prompts are
+// independent, so processing them concurrently (instead of one-by-one) is the
+// single biggest speedup for an audit — each prompt still fans out to all
+// engines in parallel internally. `limit` is kept modest to respect provider
+// rate limits (override with AUDIT_CONCURRENCY).
+async function runPool(items, limit, worker) {
+  const queue = items.map((item, idx) => [item, idx]);
+  const lanes = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    for (;;) {
+      const next = queue.shift();
+      if (!next) return;
+      await worker(next[0], next[1]);
+    }
+  });
+  await Promise.all(lanes);
+}
+
 // Retry transient AI errors (429 rate-limit, 529/503 overload, timeouts).
 async function withRetry(fn, tries = 3) {
   let lastErr;
@@ -131,13 +148,15 @@ export async function runCampaign(campaignId) {
     return;
   }
 
-  for (const prompt of activePrompts) {
+  // Process one prompt: claim its pending run, fan out to all engines, extract
+  // mentions/citations, and persist. Runs concurrently with other prompts.
+  async function processPrompt(prompt) {
     const run = await PromptRun.findOneAndUpdate(
       { campaignId, promptText: prompt.text, status: "pending" },
       { status: "running", startedAt: new Date() },
       { new: true, sort: { createdAt: -1 } }
     );
-    if (!run) continue;
+    if (!run) return;
 
     try {
       const results = await Promise.allSettled(callers.map((fn) => withRetry(() => fn(prompt.text))));
@@ -166,6 +185,9 @@ export async function runCampaign(campaignId) {
     }
   }
 
+  const concurrency = Math.max(1, parseInt(process.env.AUDIT_CONCURRENCY ?? "5", 10) || 5);
+  await runPool(activePrompts, concurrency, processPrompt);
+
   // Schedule next run
   const intervals = { hourly: 3600000, daily: 86400000, weekly: 604800000 };
   campaign.nextRunAt = new Date(Date.now() + (intervals[campaign.frequency] ?? 86400000));
@@ -178,5 +200,5 @@ export async function runCampaign(campaignId) {
     console.error("[score after campaign]", err);
   }
 
-  console.log(`✅ Campaign ${campaignId} complete (${activePrompts.length} prompts × ${callers.length} engines)`);
+  console.log(`✅ Campaign ${campaignId} complete (${activePrompts.length} prompts × ${callers.length} engines, concurrency ${concurrency})`);
 }

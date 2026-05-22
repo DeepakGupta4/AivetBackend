@@ -301,6 +301,221 @@ export async function generateCategoryPrompts({ brandName, domain, category }) {
   }
 }
 
+// ── Onboarding: business analysis & topic-grouped prompts ──────────────────
+
+/**
+ * Fetch a website's homepage and return a cleaned plain-text excerpt.
+ * Best-effort: returns "" on any failure (the LLM then works from brand knowledge).
+ */
+export async function fetchSiteText(domain, { maxChars = 6000, timeoutMs = 9000 } = {}) {
+  const clean = String(domain || "").trim().toLowerCase()
+    .replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
+  if (!clean) return "";
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(`https://${clean}`, {
+      signal: ctrl.signal,
+      redirect: "follow",
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; AIVetBot/1.0; +https://aivet.io)" },
+    });
+    if (!res.ok) return "";
+    const html = await res.text();
+    const text = html
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&[a-z]+;/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return text.slice(0, maxChars);
+  } catch {
+    return "";
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Analyze a brand/domain and return a structured "business summary" used to
+ * pre-fill the onboarding wizard: brand name, business type, language/location,
+ * about, competitive advantage, key features, target customers, topics, and
+ * suggested competitors. Fetches the homepage for grounding; falls back to the
+ * model's own knowledge when the site can't be read.
+ */
+export async function generateBusinessSummary({ domain }) {
+  const cleanDomain = String(domain || "").trim().toLowerCase()
+    .replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
+  const guessName = cleanDomain.split(".")[0]
+    ? cleanDomain.split(".")[0].charAt(0).toUpperCase() + cleanDomain.split(".")[0].slice(1)
+    : "Brand";
+
+  const fallback = {
+    brandName: guessName,
+    domain: cleanDomain,
+    businessType: "",
+    language: "English",
+    languageCode: "en",
+    country: "United States",
+    countryCode: "US",
+    about: [],
+    competitiveAdvantage: "",
+    keyFeatures: [],
+    targetCustomers: [],
+    topics: [],
+    competitors: [],
+  };
+  if (!process.env.OPENAI_API_KEY) return fallback;
+
+  const siteText = await fetchSiteText(cleanDomain);
+
+  try {
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        temperature: 0.4,
+        max_tokens: 1100,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a market analyst building a business profile for an AI-visibility (GEO/SEO) tool. " +
+              "Given a website domain and an excerpt of its homepage text, produce a concise, accurate profile. " +
+              "Infer the brand's primary market language and country from the content/TLD. " +
+              "Topics are short search-style themes (3-6 words) a user might explore about this brand or its category. " +
+              "Competitors are real, well-known rival companies in the SAME market and country. " +
+              "Respond ONLY as JSON.",
+          },
+          {
+            role: "user",
+            content:
+              `Domain: ${cleanDomain}\n` +
+              `Homepage excerpt: """${siteText || "(could not fetch — use your own knowledge of this brand/domain)"}"""\n\n` +
+              `Return JSON with EXACTLY these keys:\n` +
+              `{\n` +
+              `  "brandName": "string",\n` +
+              `  "businessType": "short label e.g. 'E-commerce & Technology'",\n` +
+              `  "language": "primary market language name e.g. 'English'",\n` +
+              `  "languageCode": "ISO 639-1 e.g. 'en'",\n` +
+              `  "country": "primary market country name e.g. 'India'",\n` +
+              `  "countryCode": "ISO 3166-1 alpha-2 e.g. 'IN'",\n` +
+              `  "about": ["2-3 short bullet sentences about the business"],\n` +
+              `  "competitiveAdvantage": "1-2 sentence summary",\n` +
+              `  "keyFeatures": ["3-5 short bullets, each 'Name: description'"],\n` +
+              `  "targetCustomers": ["3-5 short bullets"],\n` +
+              `  "topics": ["10 short search-style topics"],\n` +
+              `  "competitors": [{"brandName":"string","domain":"rival.com"}]  // 4-6 real rivals\n` +
+              `}`,
+          },
+        ],
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) return fallback;
+    const p = JSON.parse(data.choices?.[0]?.message?.content ?? "{}");
+    const arr = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim()) : []);
+    return {
+      brandName: (p.brandName || guessName).toString().trim(),
+      domain: cleanDomain,
+      businessType: (p.businessType || "").toString().trim(),
+      language: (p.language || "English").toString().trim(),
+      languageCode: (p.languageCode || "en").toString().trim().toLowerCase(),
+      country: (p.country || "United States").toString().trim(),
+      countryCode: (p.countryCode || "US").toString().trim().toUpperCase().slice(0, 2),
+      about: arr(p.about).slice(0, 4),
+      competitiveAdvantage: (p.competitiveAdvantage || "").toString().trim(),
+      keyFeatures: arr(p.keyFeatures).slice(0, 6),
+      targetCustomers: arr(p.targetCustomers).slice(0, 6),
+      topics: arr(p.topics).slice(0, 10),
+      competitors: Array.isArray(p.competitors)
+        ? p.competitors
+            .filter((c) => c && (c.brandName || c.domain))
+            .map((c) => ({
+              brandName: (c.brandName || "").toString().trim(),
+              domain: (c.domain || "").toString().trim().toLowerCase()
+                .replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, ""),
+            }))
+            .slice(0, 8)
+        : [],
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * For each topic, generate a cluster of natural user questions (prompts) that
+ * track the brand's visibility in AI assistants. Returns an array of
+ * { topic, prompts: string[] } — typically 5-6 prompts per topic.
+ */
+export async function generateTopicPrompts({ brandName, domain, businessType, topics, country, language }) {
+  const list = (Array.isArray(topics) ? topics : []).filter((t) => typeof t === "string" && t.trim()).slice(0, 8);
+  if (!list.length) return [];
+
+  const fallback = list.map((topic) => ({
+    topic,
+    prompts: [
+      `What is the best option for ${topic}?`,
+      `How do I get started with ${topic}?`,
+      `Which brands are most recommended for ${topic}?`,
+      `What should I look for when choosing ${topic}?`,
+      `Compare the top choices for ${topic}.`,
+    ],
+  }));
+  if (!process.env.OPENAI_API_KEY) return fallback;
+
+  try {
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        temperature: 0.5,
+        max_tokens: 1600,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content:
+              "You generate realistic questions a user would type into ChatGPT or Gemini, grouped by topic, " +
+              "to measure a brand's visibility in AI answers. For each topic produce 5-6 distinct, natural questions. " +
+              "Mix discovery/comparison questions (where the brand may or may not surface on its own) with a few " +
+              "brand- or category-specific questions. Keep each question under 140 characters. Respond ONLY as JSON.",
+          },
+          {
+            role: "user",
+            content:
+              `Brand: ${brandName}\nWebsite: ${domain}\nBusiness type: ${businessType || "infer"}\n` +
+              `Market: ${language || "English"} / ${country || "global"}\n` +
+              `Topics: ${JSON.stringify(list)}\n\n` +
+              `Return JSON: {"clusters":[{"topic":"<one of the topics verbatim>","prompts":["q1","q2","q3","q4","q5"]}]}`,
+          },
+        ],
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) return fallback;
+    const parsed = JSON.parse(data.choices?.[0]?.message?.content ?? "{}");
+    const clusters = Array.isArray(parsed.clusters)
+      ? parsed.clusters
+          .map((c) => ({
+            topic: (c.topic || "").toString().trim(),
+            prompts: Array.isArray(c.prompts)
+              ? c.prompts.filter((q) => typeof q === "string" && q.trim()).map((q) => q.trim()).slice(0, 6)
+              : [],
+          }))
+          .filter((c) => c.topic && c.prompts.length)
+      : [];
+    return clusters.length ? clusters : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 /** Return the list of caller functions whose env vars are set. */
 export function availableCallers() {
   const callers = [];

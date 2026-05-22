@@ -61,6 +61,20 @@ const projectSchema = new Schema({
   targetRegion: { type: String, default: "global" },
   isActive:     { type: Boolean, default: true },
   competitors:  [{ domain: String, brandName: String, addedAt: { type: Date, default: Date.now } }],
+
+  // ── Onboarding "business summary" (AI-generated when a brand is added) ─────
+  businessType:         { type: String },               // e.g. "E-commerce & Technology"
+  language:             { type: String },               // display, e.g. "English"
+  languageCode:         { type: String, default: "en" }, // ISO 639-1, e.g. "en"
+  country:              { type: String },               // display, e.g. "India"
+  countryCode:          { type: String },               // ISO 3166-1 alpha-2, e.g. "IN"
+  about:                [String],                        // bullet points about the business
+  competitiveAdvantage: { type: String },
+  keyFeatures:          [String],                        // bullet points
+  targetCustomers:      [String],                        // bullet points
+  topics:               [String],                        // suggested topic clusters
+  sitemaps:             [String],                        // optional sitemap URLs
+  keywords:             [{ keyword: String, searchVolume: Number, difficulty: Number }],
 }, { timestamps: true });
 
 // ── Prompt Campaign ───────────────────────────────────────────────────────
