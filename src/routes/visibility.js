@@ -3,6 +3,7 @@ import { VisibilityScore, Project, PromptRun } from "../models/index.js";
 import { requireAuth } from "../middleware/auth.js";
 import { buildRecommendations } from "../services/geoRecommendations.js";
 import { getDomainAuthorities } from "../services/domainAuthority.js";
+import { calculateVisibility } from "../services/visibilityCalculator.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -92,13 +93,18 @@ router.get("/:projectId/dashboard", async (req, res) => {
     const competitors = project?.competitors ?? [];
 
     // ── KPIs derived from the daily score docs ──────────────────────────────
+    // Live score from the window's actual runs. This is robust against a stale or
+    // raced stored daily score (which could read 0 if it was upserted mid-audit,
+    // before all prompt runs had completed and mentions were saved).
+    const live = calculateVisibility(runs, project?.brandName, project?.domain);
+
     const latest = scores.at(-1) ?? null;
     const first = scores[0] ?? null;
-    const currentScore = latest ? round1(latest.overallScore) : 0;
+    const currentScore = runs.length ? round1(live.overallScore) : (latest ? round1(latest.overallScore) : 0);
     const scoreChange = latest && first ? round1(latest.overallScore - first.overallScore) : 0;
 
-    const totalPrompts = scores.reduce((s, x) => s + (x.totalPrompts ?? 0), 0);
-    const totalMentions = scores.reduce((s, x) => s + (x.totalMentions ?? 0), 0);
+    const totalPrompts = runs.length || scores.reduce((s, x) => s + (x.totalPrompts ?? 0), 0);
+    const totalMentions = runs.length ? live.totalMentions : scores.reduce((s, x) => s + (x.totalMentions ?? 0), 0);
 
     // Recent vs previous half of the window → trend badges on the KPI cards.
     const mid = Math.floor(scores.length / 2);
@@ -108,7 +114,7 @@ router.get("/:projectId/dashboard", async (req, res) => {
     const promptsChange = pctChange(sum(recent, "totalPrompts"), sum(prev, "totalPrompts"));
     const mentionsChange = pctChange(sum(recent, "totalMentions"), sum(prev, "totalMentions"));
 
-    const mentionFrequency = latest?.mentionScore != null ? round1(latest.mentionScore) : 0;
+    const mentionFrequency = runs.length ? round1(live.mentionScore) : (latest?.mentionScore != null ? round1(latest.mentionScore) : 0);
     const mentionFreqChange =
       latest?.mentionScore != null && first?.mentionScore != null
         ? round1(latest.mentionScore - first.mentionScore)
@@ -209,7 +215,15 @@ router.get("/:projectId/dashboard", async (req, res) => {
       modelsBreakdown: s.modelsBreakdown ?? null,
     }));
 
-    const scoreBreakdown = latest
+    const scoreBreakdown = runs.length
+      ? {
+          mentionScore: round1(live.mentionScore),
+          rankingScore: round1(live.rankingScore),
+          sentimentScore: round1(live.sentimentScore),
+          citationScore: round1(live.citationScore),
+          diversityScore: round1(live.diversityScore),
+        }
+      : latest
       ? {
           mentionScore: latest.mentionScore ?? 0,
           rankingScore: latest.rankingScore ?? 0,
