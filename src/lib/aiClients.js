@@ -456,14 +456,15 @@ export async function generateTopicPrompts({ brandName, domain, businessType, to
   const list = (Array.isArray(topics) ? topics : []).filter((t) => typeof t === "string" && t.trim()).slice(0, 8);
   if (!list.length) return [];
 
+  const loc = country && !/global/i.test(country) ? ` in ${country}` : "";
   const fallback = list.map((topic) => ({
     topic,
     prompts: [
-      `What is the best option for ${topic}?`,
-      `How do I get started with ${topic}?`,
-      `Which brands are most recommended for ${topic}?`,
-      `What should I look for when choosing ${topic}?`,
-      `Compare the top choices for ${topic}.`,
+      `What are the best brands for ${topic}${loc}?`,
+      `Which ${topic} brands are most recommended${loc}?`,
+      `Where can I buy ${topic}${loc} online?`,
+      `What should I look for when choosing ${topic}${loc}?`,
+      `Compare the top brands for ${topic}${loc}.`,
     ],
   }));
   if (!process.env.OPENAI_API_KEY) return fallback;
@@ -484,7 +485,10 @@ export async function generateTopicPrompts({ brandName, domain, businessType, to
               "You generate realistic questions a user would type into ChatGPT or Gemini, grouped by topic, " +
               "to measure a brand's visibility in AI answers. For each topic produce 5-6 distinct, natural questions. " +
               "Mix discovery/comparison questions (where the brand may or may not surface on its own) with a few " +
-              "brand- or category-specific questions. Keep each question under 140 characters. Respond ONLY as JSON.",
+              "brand- or category-specific questions. Keep each question under 140 characters. " +
+              `CRITICAL: localize EVERY question to the brand's market country (${country || "the brand's country"}) so locally-relevant brands surface — ` +
+              `phrase them the way real customers in ${country || "that country"} search, including "in ${country || "that country"}" where natural. ` +
+              "Avoid purely global phrasing that would only return big international brands. Respond ONLY as JSON.",
           },
           {
             role: "user",
