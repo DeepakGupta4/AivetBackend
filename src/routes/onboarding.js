@@ -53,11 +53,13 @@ router.post("/prompts", async (req, res) => {
 // Step 4 data: real keyword ideas (search volume + difficulty) from DataForSEO.
 router.post("/keywords", async (req, res) => {
   try {
-    const { domain, countryCode, languageCode } = req.body ?? {};
+    const { domain, countryCode, languageCode, topics, brandName } = req.body ?? {};
     const keywords = await fetchKeywordIdeas({
       domain: cleanDomain(domain),
       countryCode,
       languageCode,
+      topics,
+      brandName,
       limit: 25,
     });
     res.json({ success: true, data: { keywords } });
