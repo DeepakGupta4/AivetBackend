@@ -52,14 +52,32 @@ export const campaignLimiter = rateLimit({
   }
 });
 
-// Project operations limiter
+// Project operations limiter — split read vs write.
+// Reads (GETs) need a generous cap because dashboards / visibility pages fire
+// many calls per render (multiple widgets each hitting /projects/:id/...).
+// Mutations (POST/PUT/DELETE) keep the strict cap to deter spam / abuse.
 export const projectLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 50, // limit each IP to 50 project operations per hour
+  max: 600,                  // reads: ~10/min sustained — covers normal browsing
+  skip: (req) => false,
+  // Apply a much smaller cap for mutations via a second limiter (mounted by
+  // the route file). Keep this one for all requests as the generous baseline.
   message: {
     success: false,
     message: 'Too many project operations, please try again later.',
     code: 'PROJECT_RATE_LIMIT_EXCEEDED'
+  }
+});
+
+// Stricter limiter for project MUTATIONS (create/update/delete/run audit).
+// Mount with router.post(...) etc instead of router.use().
+export const projectMutationLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 60,                   // 1 mutation per minute average
+  message: {
+    success: false,
+    message: 'Too many project changes, please wait a moment and try again.',
+    code: 'PROJECT_MUTATION_RATE_LIMIT_EXCEEDED'
   }
 });
 

@@ -11,11 +11,16 @@ export function getStripe() {
   return cached;
 }
 
+// PLAN_LIMITS — promptLimit is the monthly credit/prompt cap, projectLimit is
+// domains, competitorLimit is competitors trackable per brand. "free" is the
+// Ubersuggest-style preview: any new user can sign up and add 1 brand with
+// capped credits before paying. "pro" is the internal id for the publicly-
+// named "Business" tier.
 export const PLAN_LIMITS = {
-  free:       { promptLimit: 100,    projectLimit: 1 },
-  starter:    { promptLimit: 1000,   projectLimit: 3 },
-  pro:        { promptLimit: 10000,  projectLimit: 10 },
-  enterprise: { promptLimit: 100000, projectLimit: 50 },
+  free:       { promptLimit: 50,    projectLimit: 1,  competitorLimit: 3  },
+  starter:    { promptLimit: 250,   projectLimit: 1,  competitorLimit: 5  },
+  pro:        { promptLimit: 500,   projectLimit: 7,  competitorLimit: 10 },
+  enterprise: { promptLimit: 1000,  projectLimit: 15, competitorLimit: 15 },
 };
 
 // Support both STRIPE_PRICE_* and the project's STRIPE_PRICE_AIVET_* env names.

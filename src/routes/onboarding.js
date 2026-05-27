@@ -4,6 +4,7 @@ import { requireAuth } from "../middleware/auth.js";
 import { publishJob } from "../lib/qstash.js";
 import { generateBusinessSummary, generateTopicPrompts } from "../lib/aiClients.js";
 import { fetchKeywordIdeas } from "../lib/keywordData.js";
+import { verifyDomainReachable } from "../lib/domainCheck.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -23,6 +24,24 @@ router.post("/analyze", async (req, res) => {
   try {
     const domain = cleanDomain(req.body?.domain);
     if (!domain) return res.status(400).json({ success: false, message: "domain is required" });
+
+    // Reachability gate — refuse non-existent / offline domains up front so we
+    // never collect AI hallucinations about a brand whose site doesn't exist.
+    const reach = await verifyDomainReachable(domain);
+    if (!reach.ok) {
+      return res.status(400).json({
+        success: false,
+        code: "DOMAIN_UNREACHABLE",
+        message:
+          reach.reason === "dns_not_found"
+            ? `Could not reach ${domain} — the domain does not appear to exist. Check the URL and try again.`
+            : reach.reason === "timeout"
+            ? `Could not reach ${domain} — the site timed out. Check the URL or try again later.`
+            : `Could not reach ${domain}. Please verify the website is online.`,
+        data: { domain, reason: reach.reason },
+      });
+    }
+
     const summary = await generateBusinessSummary({ domain });
     res.json({ success: true, data: summary });
   } catch (err) {
@@ -80,6 +99,18 @@ router.post("/complete", async (req, res) => {
     const domain = cleanDomain(b.domain);
     const brandName = (b.brandName || domain.split(".")[0] || "Brand").toString().trim();
     if (!domain) return res.status(400).json({ success: false, message: "domain is required" });
+
+    // Defense-in-depth: even though /analyze gates this, re-check at /complete
+    // so a direct API call can't slip a bad domain through.
+    const reach = await verifyDomainReachable(domain);
+    if (!reach.ok) {
+      return res.status(400).json({
+        success: false,
+        code: "DOMAIN_UNREACHABLE",
+        message: `Could not reach ${domain}. Please verify the website is online.`,
+        data: { domain, reason: reach.reason },
+      });
+    }
 
     const competitors = Array.isArray(b.competitors)
       ? b.competitors

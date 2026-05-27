@@ -570,6 +570,69 @@ router.get("/:projectId/geo", async (req, res) => {
   }
 });
 
+// GET /api/projects/:projectId/brands-by-topic?days=30
+// Ubersuggest-style "Brands Visibility By Topic" — for each prompt (topic),
+// returns the top-ranked brands aggregated across all AI engines.
+router.get("/:projectId/brands-by-topic", async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const days = parseInt(req.query.days ?? "30", 10);
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+
+    const [project, runs] = await Promise.all([
+      Project.findById(projectId).lean(),
+      PromptRun.find({ projectId, createdAt: { $gte: since } }).lean(),
+    ]);
+
+    const aliases = brandAliases(project?.brandName, project?.domain);
+
+    // Group runs by promptText (each unique prompt is one topic row).
+    const topicMap = {};
+    for (const run of runs) {
+      const topic = (run.promptText ?? "").trim();
+      if (!topic) continue;
+      const t = (topicMap[topic] ??= { topic, responses: 0, brands: {} });
+      for (const resp of run.responses ?? []) {
+        t.responses++;
+        const seen = new Set();
+        for (const m of resp.mentions ?? []) {
+          const display = (m.entityName ?? "").trim();
+          const name = normName(display);
+          if (!name || seen.has(name)) continue;
+          seen.add(name);
+          const b = (t.brands[name] ??= { name: display, mentions: 0, ranks: [], isOwn: matchesBrand(display, aliases) });
+          b.mentions += m.mentionCount ?? 1;
+          if (m.rankPosition) b.ranks.push(m.rankPosition);
+        }
+      }
+    }
+
+    // For each topic, rank brands by mention count (desc), tie-break by avg rank (asc).
+    const topics = Object.values(topicMap).map((t) => {
+      const brands = Object.values(t.brands)
+        .map((b) => ({
+          name: b.name,
+          mentions: b.mentions,
+          avgRank: b.ranks.length ? round1(b.ranks.reduce((a, r) => a + r, 0) / b.ranks.length) : null,
+          isOwn: b.isOwn,
+        }))
+        .sort((a, b) => {
+          if (b.mentions !== a.mentions) return b.mentions - a.mentions;
+          const ra = a.avgRank ?? 99, rb = b.avgRank ?? 99;
+          return ra - rb;
+        })
+        .slice(0, 8)
+        .map((b, i) => ({ ...b, position: i + 1 }));
+      return { topic: t.topic, responses: t.responses, brands };
+    }).sort((a, b) => b.responses - a.responses);
+
+    res.json({ success: true, data: { topics, brandName: project?.brandName ?? "" } });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // GET /api/projects/:projectId/scores/latest
 router.get("/:projectId/scores/latest", async (req, res) => {
   try {

@@ -253,7 +253,15 @@ export async function extractMentionedBrands(text) {
  * that's the point: measure if the brand surfaces on its own). LLM-generated from
  * the brand's category, with a template fallback.
  */
-export async function generateCategoryPrompts({ brandName, domain, category }) {
+// maxPrompts lets paid tiers see the full 8-question audit while free preview
+// is capped at 3 so the audit finishes ~3x faster.
+// extraContext (about[], keyFeatures[]) is woven into the user message so the
+// generator stays glued to the brand's actual category instead of drifting to
+// adjacent niches (e.g. a fitness-equipment brand should not produce sneaker
+// or supplement prompts — that's what made the earlier ziva.in audit look like
+// it was reaching across unrelated industries).
+export async function generateCategoryPrompts({ brandName, domain, category, maxPrompts = 8, extraContext = {} }) {
+  const cap = Math.max(1, Math.min(8, maxPrompts | 0 || 8));
   const cat = (category ?? "").trim() || "products";
   const fallback = [
     `Best ${cat} brands`,
@@ -262,8 +270,12 @@ export async function generateCategoryPrompts({ brandName, domain, category }) {
     `Best ${cat} for gifting`,
     `Which ${cat} brand is most trusted?`,
     `Recommend top ${cat} brands for quality and durability`,
-  ];
+  ].slice(0, cap);
   if (!process.env.OPENAI_API_KEY) return fallback;
+
+  const about = Array.isArray(extraContext.about) ? extraContext.about.filter((s) => typeof s === "string" && s.trim()).slice(0, 4) : [];
+  const features = Array.isArray(extraContext.keyFeatures) ? extraContext.keyFeatures.filter((s) => typeof s === "string" && s.trim()).slice(0, 4) : [];
+  const region = (extraContext.country || extraContext.targetRegion || "").toString().trim();
 
   try {
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -271,20 +283,31 @@ export async function generateCategoryPrompts({ brandName, domain, category }) {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
       body: JSON.stringify({
         model: "gpt-4o-mini",
-        temperature: 0.4,
+        temperature: 0.3,
         max_tokens: 400,
         response_format: { type: "json_object" },
         messages: [
           {
             role: "system",
             content:
-              "You generate buyer-intent search questions a shopper would ask an AI assistant to DISCOVER brands in a category. " +
-              "The questions must NOT mention the given brand's name (we measure whether it appears on its own). " +
-              "Cover discovery, comparison, best-for-gifting, where-to-buy, most-trusted, and affordable angles. Respond ONLY as JSON.",
+              "You generate buyer-intent search questions a shopper would ask an AI assistant to DISCOVER brands in a SPECIFIC category. " +
+              "STRICT RULES: " +
+              "(1) Every question must be tightly scoped to the exact category provided — never drift to adjacent or unrelated niches. " +
+              "(2) Do NOT mention the given brand's name (we measure whether it appears on its own). " +
+              "(3) Cover discovery, comparison, best-for-gifting, where-to-buy, most-trusted, and affordable angles WITHIN the category. " +
+              "(4) Use the region/country if provided to make questions locally relevant. " +
+              "Respond ONLY as JSON.",
           },
           {
             role: "user",
-            content: `Brand: ${brandName}\nWebsite: ${domain}\nCategory: ${category || "infer from the website"}\n\nReturn JSON: {"prompts":["q1","q2","q3","q4","q5","q6"]}`,
+            content:
+              `Brand: ${brandName}\n` +
+              `Website: ${domain}\n` +
+              `Category: ${category || "infer from the website"}\n` +
+              (region ? `Region: ${region}\n` : "") +
+              (about.length ? `About: ${about.join("; ")}\n` : "") +
+              (features.length ? `Key offerings: ${features.join("; ")}\n` : "") +
+              `\nReturn up to ${cap} prompts as JSON: {"prompts":["q1","q2"]}`,
           },
         ],
       }),
@@ -293,7 +316,7 @@ export async function generateCategoryPrompts({ brandName, domain, category }) {
     if (!res.ok) return fallback;
     const parsed = JSON.parse(data.choices?.[0]?.message?.content ?? "{}");
     const prompts = Array.isArray(parsed.prompts)
-      ? parsed.prompts.filter((p) => typeof p === "string" && p.trim()).map((p) => p.trim()).slice(0, 8)
+      ? parsed.prompts.filter((p) => typeof p === "string" && p.trim()).map((p) => p.trim()).slice(0, cap)
       : [];
     return prompts.length ? prompts : fallback;
   } catch {
